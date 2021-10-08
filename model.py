@@ -1,13 +1,31 @@
+import torch
 from torch import nn
 
 
-class Model(nn.Module):
+class Unet(nn.Module):
     def __init__(self):
-        super().__init__()
-        self.net = EfficientNet3D.from_name("efficientnet-b0", override_params={'num_classes': 2}, in_channels=1)
-        n_features = self.net._fc.in_features
-        self.net._fc = nn.Linear(in_features=n_features, out_features=1, bias=True)
+        super(Unet, self).__init__()
+        self.model = torch.hub.load('mateuszbuda/brain-segmentation-pytorch',
+                                    'unet',
+                                    in_channels=64,
+                                    out_channels=1,
+                                    init_features=32,
+                                    pretrained=False)
 
-    def forward(self, x):
-        out = self.net(x)
-        return out
+        self.classifier_layer = nn.Sequential(
+            # nn.Linear(1280, 512),
+            # nn.BatchNorm1d(512),
+            # nn.Dropout(0.2),
+            # nn.Linear(512, 256),
+            nn.Linear(256**2, 2)
+        )
+
+    def forward(self, inputs):
+        x = self.model(inputs)
+
+        # # Pooling and final linear layer
+        # x = self.model._avg_pooling(x)
+        x = x.flatten(start_dim=1)
+        # x = self.model._dropout(x)
+        x = self.classifier_layer(x)
+        return x[:, 0].unsqueeze(1)

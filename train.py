@@ -1,8 +1,9 @@
+import os
 import time
-
+import torch
 import numpy as np
 import pandas as pd
-import torch
+
 from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import (train_test_split)
 from torch.nn import functional as torch_functional
@@ -10,10 +11,10 @@ from torch.utils import data as torch_data
 
 from config import Config
 from datasets import Dataset
-from model import Model
+from model import Unet as Model
 
 DATA_DIRECTORY = Config.DATA_DIR
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+NUM_WORKERS = os.cpu_count() // 2
 MRI_TYPES = ['FLAIR', 'T1w', 'T1wCE', 'T2w']
 SIZE = 256
 NUM_IMAGES = 64
@@ -22,6 +23,8 @@ N_EPOCHS = 10
 SEED = 23456
 LEARNING_RATE = 0.0008
 LR_DECAY = 0.9
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 samples_to_exclude = [109, 123, 709]
 train_df = pd.read_csv(f"{DATA_DIRECTORY}/train_labels.csv")
@@ -84,7 +87,7 @@ class Trainer:
         sum_loss = 0
 
         for step, batch in enumerate(train_loader, 1):
-            X = batch["X"].to(self.device)
+            X = batch["X"].to(self.device, dtype=torch.float)
             targets = batch["y"].to(self.device)
             self.optimizer.zero_grad()
             outputs = self.model(X).squeeze(1)
@@ -110,7 +113,7 @@ class Trainer:
 
         for step, batch in enumerate(valid_loader, 1):
             with torch.no_grad():
-                X = batch["X"].to(self.device)
+                X = batch["X"].to(self.device, dtype=torch.float)
                 targets = batch["y"].to(self.device)
 
                 outputs = self.model(X).squeeze(1)
@@ -165,26 +168,32 @@ def train_mri_type(df_train, df_valid, mri_type):
     # display(df_train.head())
     # display(df_valid.head())
 
-    train_data_retriever = Dataset(DATA_DIRECTORY,
-                                   df_train["BraTS21ID"].values,
-                                   df_train["MGMT_value"].values,
-                                   df_train["MRI_Type"].values)
+    train_data_retriever = Dataset(data_dir=DATA_DIRECTORY,
+                                   paths=df_train["BraTS21ID"].values,
+                                   targets=df_train["MGMT_value"].values,
+                                   num_imgs=NUM_IMAGES,
+                                   img_size=SIZE,
+                                   mri_type=df_train["MRI_Type"].values
+                                   )
 
-    valid_data_retriever = Dataset(DATA_DIRECTORY,
-                                   df_valid["BraTS21ID"].values,
-                                   df_valid["MGMT_value"].values,
-                                   df_valid["MRI_Type"].values)
+    valid_data_retriever = Dataset(data_dir=DATA_DIRECTORY,
+                                   paths=df_valid["BraTS21ID"].values,
+                                   targets=df_valid["MGMT_value"].values,
+                                   num_imgs=NUM_IMAGES,
+                                   img_size=SIZE,
+                                   mri_type=df_valid["MRI_Type"].values)
 
-    train_loader = torch_data.DataLoader(train_data_retriever, batch_size=BATCH_SIZE, shuffle=True, num_workers=8)
-    valid_loader = torch_data.DataLoader(valid_data_retriever, batch_size=BATCH_SIZE, shuffle=False, num_workers=8)
+    train_loader = torch_data.DataLoader(dataset=train_data_retriever,
+                                         batch_size=BATCH_SIZE,
+                                         shuffle=True,
+                                         num_workers=NUM_WORKERS)
+    valid_loader = torch_data.DataLoader(dataset=valid_data_retriever,
+                                         batch_size=BATCH_SIZE,
+                                         shuffle=False,
+                                         num_workers=NUM_WORKERS)
 
-    model = torch.hub.load('mateuszbuda/brain-segmentation-pytorch',
-                           'unet',
-                           in_channels=64,
-                           out_channels=1,
-                           init_features=32,
-                           pretrained=False)
-    # model = Model()
+
+    model = Model()
     model.to(device)
 
     # checkpoint = torch.load("best-model-all-auc0.555.pth")
@@ -196,20 +205,13 @@ def train_mri_type(df_train, df_valid, mri_type):
     # optimizer = torch.optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
 
     criterion = torch_functional.binary_cross_entropy_with_logits
-
-    trainer = Trainer(
-        model,
-        device,
-        optimizer,
-        criterion
-    )
+    trainer = Trainer(model, device, optimizer, criterion)
 
     history = trainer.fit(epochs=10,
                           train_loader=train_loader,
                           valid_loader=valid_loader,
                           save_path=f"{mri_type}",
-                          patience=10,
-                          )
+                          patience=10)
 
     return trainer.lastmodel
 
@@ -256,3 +258,9 @@ modelfiles = None
 if not modelfiles:
     modelfiles = [train_mri_type(df_train, df_valid, m) for m in MRI_TYPES]
     print(modelfiles)
+
+ # right shape
+ # torch.Size([1, 3, 256, 256])
+
+ # current shape
+ # 4-dimensional weight [6, 64, 3, 3], but got 5-dimensional input of size [4, 1, 256, 256, 64]
