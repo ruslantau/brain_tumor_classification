@@ -1,30 +1,33 @@
 import os
 import time
-import torch
+
 import numpy as np
 import pandas as pd
-
+import torch
 from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import (train_test_split)
-from torch.nn import functional as torch_functional
+from torch.nn import functional as F
 from torch.utils import data as torch_data
 
 from config import Config
 from datasets import Dataset
-from model import Unet as Model
+from model import Unet
 
 DATA_DIRECTORY = Config.DATA_DIR
-NUM_WORKERS = os.cpu_count() // 2
+WEIGHTS_DIR = Config.WEIGHTS_DIR
+TEMP_DIR = Config.TEMP_DIR
+
+NUM_WORKERS = os.cpu_count() - 2
 MRI_TYPES = ['FLAIR', 'T1w', 'T1wCE', 'T2w']
 SIZE = 256
-NUM_IMAGES = 64
+NUM_IMAGES = 128
 BATCH_SIZE = 4
 N_EPOCHS = 10
 SEED = 23456
-LEARNING_RATE = 0.0008
-LR_DECAY = 0.9
+LEARNING_RATE = 1e-4
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+model = Unet(in_channels=NUM_IMAGES, out_channels=1, init_features=32)
 
 samples_to_exclude = [109, 123, 709]
 train_df = pd.read_csv(f"{DATA_DIRECTORY}/train_labels.csv")
@@ -69,7 +72,7 @@ class Trainer:
             if self.best_valid_score > valid_loss:
                 self.save_model(n_epoch, save_path, valid_loss, valid_auc)
                 self.info_message(
-                    "auc improved from {:.4f} to {:.4f}. Saved model to '{}'",
+                    "loss improved from {:.4f} to {:.4f}. Saved model to '{}'",
                     self.best_valid_score, valid_loss, self.lastmodel
                 )
                 self.best_valid_score = valid_loss
@@ -148,7 +151,7 @@ class Trainer:
         print(message.format(*args), end=end)
 
 
-def train_mri_type(df_train, df_valid, mri_type):
+def train_mri_type(model, df_train, df_valid, mri_type):
     if mri_type == "all":
         train_list = []
         valid_list = []
@@ -165,8 +168,6 @@ def train_mri_type(df_train, df_valid, mri_type):
         df_valid.loc[:, "MRI_Type"] = mri_type
 
     print(df_train.shape, df_valid.shape)
-    # display(df_train.head())
-    # display(df_valid.head())
 
     train_data_retriever = Dataset(data_dir=DATA_DIRECTORY,
                                    paths=df_train["BraTS21ID"].values,
@@ -192,75 +193,28 @@ def train_mri_type(df_train, df_valid, mri_type):
                                          shuffle=False,
                                          num_workers=NUM_WORKERS)
 
-
-    model = Model()
+    # model = Model()
     model.to(device)
 
-    # checkpoint = torch.load("best-model-all-auc0.555.pth")
-    # model.load_state_dict(checkpoint["model_state_dict"])
+    # optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
+    optimizer = torch.optim.SGD(model.parameters(), lr=LEARNING_RATE, momentum=0.9)
 
-    # print(model)
-
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
-    # optimizer = torch.optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
-
-    criterion = torch_functional.binary_cross_entropy_with_logits
+    criterion = F.binary_cross_entropy_with_logits
     trainer = Trainer(model, device, optimizer, criterion)
 
-    history = trainer.fit(epochs=10,
-                          train_loader=train_loader,
-                          valid_loader=valid_loader,
-                          save_path=f"{mri_type}",
-                          patience=10)
+    trainer.fit(epochs=N_EPOCHS,
+                train_loader=train_loader,
+                valid_loader=valid_loader,
+                save_path=WEIGHTS_DIR / f"{model.__class__.__name__}_{mri_type}",
+                patience=10)
 
     return trainer.lastmodel
 
 
-def predict(modelfile, df, mri_type, split):
-    print("Predict:", modelfile, mri_type, df.shape)
-    df.loc[:, "MRI_Type"] = mri_type
-    data_retriever = Dataset(DATA_DIRECTORY,
-                             df.index.values,
-                             mri_type=df["MRI_Type"].values,
-                             split=split)
-
-    data_loader = torch_data.DataLoader(data_retriever,
-                                        batch_size=4,
-                                        shuffle=False,
-                                        num_workers=8)
-
-    model = Model()
-    model.to(device)
-
-    checkpoint = torch.load(modelfile)
-    model.load_state_dict(checkpoint["model_state_dict"])
-    model.eval()
-
-    y_pred = []
-    ids = []
-
-    for e, batch in enumerate(data_loader, 1):
-        print(f"{e}/{len(data_loader)}", end="\r")
-        with torch.no_grad():
-            tmp_pred = torch.sigmoid(model(batch["X"].to(device))).cpu().numpy().squeeze()
-            if tmp_pred.size == 1:
-                y_pred.append(tmp_pred)
-            else:
-                y_pred.extend(tmp_pred.tolist())
-            ids.extend(batch["id"].numpy().tolist())
-
-    preddf = pd.DataFrame({"BraTS21ID": ids, "MGMT_value": y_pred})
-    preddf = preddf.set_index("BraTS21ID")
-    return preddf
-
 
 modelfiles = None
 if not modelfiles:
-    modelfiles = [train_mri_type(df_train, df_valid, m) for m in MRI_TYPES]
+    modelfiles = [train_mri_type(model, df_train, df_valid, m) for m in MRI_TYPES]
     print(modelfiles)
 
- # right shape
- # torch.Size([1, 3, 256, 256])
-
- # current shape
- # 4-dimensional weight [6, 64, 3, 3], but got 5-dimensional input of size [4, 1, 256, 256, 64]
+df_valid.to_csv(TEMP_DIR / 'df_valid.csv', sep=';', index=False)

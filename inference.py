@@ -7,24 +7,25 @@ from torch.utils import data as torch_data
 
 from config import Config
 from datasets import Dataset
-from model import Unet as Model
+from model import Unet
 
 DATA_DIRECTORY = Config.DATA_DIR
-NUM_WORKERS = os.cpu_count() // 2
+TEMP_DIR = Config.TEMP_DIR
+
+NUM_WORKERS = os.cpu_count() - 2
 MRI_TYPES = ['FLAIR', 'T1w', 'T1wCE', 'T2w']
 SIZE = 256
-NUM_IMAGES = 64
-BATCH_SIZE = 4
-SEED = 23456
+NUM_IMAGES = 128
+BATCH_SIZE = 8
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-modelfiles = ['FLAIR-e3-loss0.680-auc0.600.pth',
-              'T1w-e2-loss0.674-auc0.620.pth',
-              'T1wCE-e8-loss0.702-auc0.550.pth',
-              'T2w-e4-loss0.735-auc0.530.pth']
+modelfiles = ['C:\\Users\\ruslantau\\Documents\\PycharmProjects\\brain_tumor_classification\\weights\\Unet_FLAIR-e5-loss0.678-auc0.603.pth',
+              'C:\\Users\\ruslantau\\Documents\\PycharmProjects\\brain_tumor_classification\\weights\\Unet_T1w-e2-loss0.692-auc0.625.pth',
+              'C:\\Users\\ruslantau\\Documents\\PycharmProjects\\brain_tumor_classification\\weights\\Unet_T1wCE-e2-loss0.720-auc0.592.pth',
+              'C:\\Users\\ruslantau\\Documents\\PycharmProjects\\brain_tumor_classification\\weights\\Unet_T2w-e2-loss0.794-auc0.451.pth']
 
 
-def predict(modelfile, df, mri_type, split):
+def predict(model, modelfile, df, mri_type, split):
     print("Predict:", modelfile, mri_type, df.shape)
     df.loc[:, "MRI_Type"] = mri_type
     data_retriever = Dataset(data_dir=DATA_DIRECTORY,
@@ -39,7 +40,6 @@ def predict(modelfile, df, mri_type, split):
                                         shuffle=False,
                                         num_workers=NUM_WORKERS)
 
-    model = Model()
     model.to(device)
 
     checkpoint = torch.load(modelfile)
@@ -64,27 +64,24 @@ def predict(modelfile, df, mri_type, split):
     return preddf
 
 
-df_valid = pd.read_csv('df_valid.csv', sep=';')
+model = Unet(in_channels=NUM_IMAGES, out_channels=1, init_features=32)
+
+df_valid = pd.read_csv(TEMP_DIR / 'df_valid.csv', sep=';')
 df_valid = df_valid.set_index("BraTS21ID")
 df_valid["MGMT_pred"] = 0
 for m, mtype in zip(modelfiles, MRI_TYPES):
-    pred = predict(m, df_valid, mtype, "train")
+    pred = predict(model, m, df_valid, mtype, "train")
     df_valid["MGMT_pred"] += pred["MGMT_value"]
 df_valid["MGMT_pred"] /= len(modelfiles)
 auc = roc_auc_score(df_valid["MGMT_value"], df_valid["MGMT_pred"])
 print(f"Validation ensemble AUC: {auc:.4f}")
 
 
-submission = pd.read_csv(f"{DATA_DIRECTORY}/sample_submission.csv", index_col="BraTS21ID")
-
+submission = pd.read_csv(DATA_DIRECTORY / "sample_submission.csv", index_col="BraTS21ID")
 submission["MGMT_value"] = 0
 for m, mtype in zip(modelfiles, MRI_TYPES):
-    pred = predict(m, submission, mtype, split="test")
+    pred = predict(model, m, submission, mtype, split="test")
     submission["MGMT_value"] += pred["MGMT_value"]
 
 submission["MGMT_value"] /= len(modelfiles)
-submission["MGMT_value"].to_csv("submission.csv")
-
-# kaggle competitions submit -c journey-springfield \
-# -f /content/gdrive/MyDrive/temp/simple_cnn_baseline.csv \
-# -m "simple_cnn_baseline"
+submission["MGMT_value"].to_csv(TEMP_DIR / "submission.csv")
