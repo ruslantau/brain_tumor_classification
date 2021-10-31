@@ -19,15 +19,14 @@ TEMP_DIR = Config.TEMP_DIR
 
 NUM_WORKERS = os.cpu_count() - 2
 MRI_TYPES = ['FLAIR', 'T1w', 'T1wCE', 'T2w']
-SIZE = 256
-NUM_IMAGES = 128
-BATCH_SIZE = 4
+IMAGE_SIZE = 256
+BATCH_SIZE = 8
 N_EPOCHS = 10
 SEED = 23456
 LEARNING_RATE = 1e-4
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-model = Unet(in_channels=NUM_IMAGES, out_channels=1, init_features=32)
+model = Unet(in_channels=IMAGE_SIZE, out_channels=1, init_features=32)
 
 samples_to_exclude = [109, 123, 709]
 train_df = pd.read_csv(f"{DATA_DIRECTORY}/train_labels.csv")
@@ -172,17 +171,16 @@ def train_mri_type(model, df_train, df_valid, mri_type):
     train_data_retriever = Dataset(data_dir=DATA_DIRECTORY,
                                    paths=df_train["BraTS21ID"].values,
                                    targets=df_train["MGMT_value"].values,
-                                   num_imgs=NUM_IMAGES,
-                                   img_size=SIZE,
-                                   mri_type=df_train["MRI_Type"].values
+                                   mri_types=df_train["MRI_Type"].values,
+                                   image_size=IMAGE_SIZE
                                    )
 
     valid_data_retriever = Dataset(data_dir=DATA_DIRECTORY,
                                    paths=df_valid["BraTS21ID"].values,
                                    targets=df_valid["MGMT_value"].values,
-                                   num_imgs=NUM_IMAGES,
-                                   img_size=SIZE,
-                                   mri_type=df_valid["MRI_Type"].values)
+                                   mri_types=df_valid["MRI_Type"].values,
+                                   image_size=IMAGE_SIZE
+                                   )
 
     train_loader = torch_data.DataLoader(dataset=train_data_retriever,
                                          batch_size=BATCH_SIZE,
