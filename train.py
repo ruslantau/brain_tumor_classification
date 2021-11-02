@@ -28,7 +28,7 @@ LEARNING_RATE = 1e-4
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 model = Unet(in_channels=IMAGE_SIZE, out_channels=1, init_features=32)
 
-samples_to_exclude = [109, 123, 709]
+samples_to_exclude = [109, 123, 709]  # too much loosed samples
 train_df = pd.read_csv(f"{DATA_DIRECTORY}/train_labels.csv")
 train_df = train_df[~train_df.BraTS21ID.isin(samples_to_exclude)]
 
